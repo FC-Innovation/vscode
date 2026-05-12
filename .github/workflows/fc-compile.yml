@@ -1,0 +1,95 @@
+# =============================================================================
+# FC IDE — VS Code fork CI template (WP-3.1)
+# =============================================================================
+# Copy this file into YOUR fork repository as:
+#   .github/workflows/fc-compile.yml
+#
+# Prerequisites on the fork branch match microsoft/vscode — see upstream:
+#   https://github.com/microsoft/vscode/wiki/How-to-Contribute
+#
+# Tier A (below): proves `npm run compile` on Linux + uploads a small manifest artifact.
+# Tier B (pilot): replace the artifact step with `gulp`-based packaging jobs per OS;
+#   see upstream `.github/workflows/` for reference (heavy runners / caching).
+#
+# Node / package manager (stay driven by upstream, not this template):
+#   - Node: `.nvmrc` at repo root — bump only when merging upstream releases that change it.
+#   - Install: upstream VS Code root ships `package-lock.json`; use `npm ci`.
+#     Older forks still on Yarn keep `yarn.lock` — adjust jobs to `yarn install --frozen-lockfile`
+#     and `yarn compile` if your FC branch has not merged upstream’s npm migration yet.
+#   - Cache: actions/setup-node `cache: npm` uses package-lock.json.
+# =============================================================================
+
+name: FC IDE fork — compile (Linux)
+
+on:
+  push:
+    branches: [fc/main, main]
+  pull_request:
+    branches: [fc/main, main]
+  workflow_dispatch:
+
+# Least-privilege default (org repos with restricted token policies).
+# upload-artifact requires actions:write; checkout needs contents:read.
+permissions:
+  contents: read
+  actions: write
+
+concurrency:
+  group: fc-vscode-compile-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  compile-linux:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: ".nvmrc"
+          cache: npm
+
+      # Minimal packages frequently required for native modules / secret-service stubs.
+      # Expand using upstream wiki if compile fails on missing headers.
+      - name: Linux build deps (minimal)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            pkg-config \
+            libxkbfile-dev \
+            libsecret-1-dev \
+            libkrb5-dev
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Compile
+        env:
+          NODE_OPTIONS: --max-old-space-size=8192
+        run: npm run compile
+
+      # Tier A artifact — satisfies WP-3.1 “at least one artifact” without multi‑GB uploads.
+      # Replace this step with packaged builds when pilot needs installers (Tier B).
+      - name: Write compile manifest artifact
+        run: |
+          set -euo pipefail
+          {
+            echo "git_sha=$(git rev-parse HEAD)"
+            echo "github_ref=${GITHUB_REF}"
+            echo "workflow=${GITHUB_WORKFLOW}"
+            echo "runner_os=$(uname -s)"
+            echo "--- top-level out/ ---"
+            ls -la out 2>/dev/null || echo "(no out/ — compile layout may differ)"
+            echo "--- disk ---"
+            du -sh out 2>/dev/null || true
+          } > compile-manifest.txt
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: fc-vscode-compile-manifest-linux
+          path: compile-manifest.txt
+          retention-days: 14
